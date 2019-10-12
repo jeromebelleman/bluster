@@ -1,0 +1,59 @@
+#! /usr/bin/env python
+
+'''
+Blender cluster
+'''
+
+import sys
+import os
+import argparse
+import subprocess
+import pgmagick
+
+
+def main():
+    '''
+    Run
+    '''
+
+    # Parse arguments
+    parser = argparse.ArgumentParser()
+    parser.add_argument('region', type=int, help="region size (%)")
+    parser.add_argument('input', help="input Blender file")
+    parser.add_argument('output', help="output PNG file")
+    parser.add_argument('--bpy', default='/usr/share/bluster/blender.py',
+                        help="Blender Python file")
+    args = parser.parse_args()
+
+    # Run Blender
+    files = []
+    for i in range(0, 100, args.region):
+        for j in range(0, 100, args.region):
+            min_x = '%s' % (i / 100.)
+            min_y = '%s' % (j / 100.)
+            max_x = '%s' % (min(i + args.region, 100) / 100.)
+            max_y = '%s' % (min(j + args.region, 100) / 100.)
+            files.append('%s-%s-%s-%s-%s' % (min_x,
+                                             min_y,
+                                             max_x,
+                                             max_y,
+                                             args.output))
+            subprocess.call(['blender',
+                             args.input,
+                             '-b', '-P', args.bpy,
+                             '--', min_x, min_y, max_x, max_y, args.output])
+
+    # Stitch images
+    base = pgmagick.Image(files[0])
+    for fle in files[1:]:
+        layer = pgmagick.Image(fle)
+        base.composite(layer, 0, 0, pgmagick.CompositeOperator.AddCompositeOp)
+    base.write(args.output)
+
+    # Clean up
+    for fle in files:
+        os.remove(fle)
+
+
+if __name__ == '__main__':
+    sys.exit(main())
