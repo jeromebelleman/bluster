@@ -94,7 +94,6 @@ def render(lock, regions, node, client, inputfile, verbose):
             uid = uuid.uuid4()
             outpath = '%s/%s.png' % (dry, uid)
 
-            tprint(lock, '%s %s' % (node, region))
             cmd = [
                 'cd', '.bluster;',
                 'blender-*/blender',
@@ -107,7 +106,9 @@ def render(lock, regions, node, client, inputfile, verbose):
             + [pipes.quote(outpath)]
 
             if verbose:
-                tprint(lock, ' '.join(cmd))
+                tprint(lock, '%s: %s' % (node, ' '.join(cmd)))
+            else:
+                tprint(lock, '%s: %s' % (node, region))
 
             _, stdout, _ = client['client'].exec_command(' '.join(cmd))
             stdout.read()
