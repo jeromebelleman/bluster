@@ -9,7 +9,6 @@ import os
 import argparse
 import pipes
 import threading
-import uuid
 import time
 import queue
 
@@ -91,8 +90,7 @@ def render(lock, regions, node, client, inputfile, verbose):
         if region:
             # Render
             dry = os.path.basename(inputfile[:-6])
-            uid = uuid.uuid4()
-            outpath = '%s/%s.png' % (dry, uid)
+            outpath = '%s/%s.png' % (dry, '-'.join(region))
 
             cmd = [
                 'cd', '.bluster;',
