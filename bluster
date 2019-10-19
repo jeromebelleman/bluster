@@ -43,7 +43,8 @@ def setup(cfg, lock, bpy, clients, node, key, inputfile):
     clients[node] = {'client': client, 'sftp': sftp}
 
     # Make directories
-    cmd = 'mkdir -p .bluster/%s' % pipes.quote(inputfile[:-6])
+    dry = os.path.basename(inputfile[:-6])
+    cmd = 'mkdir -p .bluster/%s' % pipes.quote(dry)
     _, stdout, _ = client.exec_command(cmd)
     stdout.read()
 
@@ -77,7 +78,7 @@ def setup(cfg, lock, bpy, clients, node, key, inputfile):
 
     # Copy files
     copy(lock, node, sftp, bpy, '.bluster')
-    copy(lock, node, sftp, inputfile, '.bluster/%s' % inputfile[:-6])
+    copy(lock, node, sftp, inputfile, '.bluster/%s' % dry)
 
 
 def render(lock, regions, node, client, inputfile, verbose):
@@ -89,7 +90,7 @@ def render(lock, regions, node, client, inputfile, verbose):
         region = regions.get()
         if region:
             # Render
-            dry = inputfile[:-6] # FIXME basename inputfile?
+            dry = os.path.basename(inputfile[:-6])
             uid = uuid.uuid4()
             outpath = '%s/%s.png' % (dry, uid)
 
@@ -97,7 +98,7 @@ def render(lock, regions, node, client, inputfile, verbose):
             cmd = [
                 'cd', '.bluster;',
                 'blender-*/blender',
-                pipes.quote('%s/%s' % (dry, inputfile)),
+                pipes.quote('%s/%s' % (dry, os.path.basename(inputfile))),
                 '-b',
                 '-P', 'blender.py',
                 '--',
@@ -157,7 +158,7 @@ def main():
         cfg = yaml.load(fhl)
 
     # Make directory on master
-    indir = '%s/%s' % (blusterdir, args.input[:-6])
+    indir = '%s/%s' % (blusterdir, os.path.basename(args.input[:-6]))
     try:
         os.mkdir(indir)
     except OSError:
