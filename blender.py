@@ -32,8 +32,7 @@ def main():
     bpy.context.scene.render.use_border = True
 
     # Render
-    filepath = '%s-%s-%s-%s-%s' % tuple(argv)
-    bpy.data.scenes['Scene'].render.filepath = filepath
+    bpy.data.scenes['Scene'].render.filepath = args.output
     bpy.ops.render.render(write_still=True)
 
 

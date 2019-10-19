@@ -7,8 +7,130 @@ Blender cluster
 import sys
 import os
 import argparse
-import subprocess
+import pipes
+import threading
+import uuid
+import time
+import queue
+
+import paramiko
 import pgmagick
+import yaml
+
+def tprint(lock, msg):
+    '''
+    Thread-safe print
+    '''
+
+    lock.acquire()
+    print msg
+    lock.release()
+
+
+def setup(cfg, lock, bpy, clients, node, key, inputfile, verbose):
+    '''
+    Set up worker node
+    '''
+
+    # Open SSH connection
+    tprint(lock, "%s: Opening SSH connection" % node)
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    proxy = paramiko.ProxyCommand('ssh %s nc %s 22' % (cfg['proxy'], node))
+    client.connect(hostname=node, username='root', pkey=key, sock=proxy)
+    sftp = client.open_sftp()
+
+    clients[node] = {'client': client, 'sftp': sftp}
+
+    # Make directories
+    cmd = 'mkdir -p .bluster/%s' % pipes.quote(inputfile[:-6])
+    _, stdout, _ = client.exec_command(cmd)
+    stdout.read()
+
+    # Install Blender if needs be
+    cmd = 'ls .bluster/blender-* | grep -v bz2'
+    _, stdout, _ = client.exec_command(cmd)
+
+    if stdout.channel.recv_exit_status() == 0:
+        if verbose:
+            tprint(lock, "%s: Blender is already available" % node)
+    else:
+        tprint(lock, "%s: Installing bzip2" % node)
+        cmd = 'yum -y install bzip2'
+        _, stdout, _ = client.exec_command(cmd)
+        stdout.read()
+
+        tprint(lock, "%s: Downloading Blender" % node)
+        cmd = 'cd .bluster; curl -LO %s' % pipes.quote(cfg['url'])
+        _, stdout, _ = client.exec_command(cmd)
+        stdout.read()
+
+        tprint(lock, "%s: Extracting Blender tarball" % node)
+        cmd = 'cd .bluster; tar xf blender-*.tar.bz2'
+        _, stdout, _ = client.exec_command(cmd)
+        stdout.read()
+
+        tprint(lock, "%s: Removing Blender tarball" % node)
+        cmd = 'cd .bluster; rm blender-*.tar.bz2'
+        _, stdout, _ = client.exec_command(cmd)
+        stdout.read()
+
+    # Copy files
+    copy(lock, node, sftp, bpy, '.bluster')
+    copy(lock, node, sftp, inputfile, '.bluster/%s' % inputfile[:-6])
+
+
+def render(lock, regions, node, client, inputfile):
+    '''
+    Render region
+    '''
+
+    while True:
+        region = regions.get()
+        if region:
+            # Render
+            dry = inputfile[:-6] # FIXME basename inputfile?
+            uid = uuid.uuid4()
+            outpath = '%s/%s.png' % (dry, uid)
+
+            tprint(lock, '%s %s' % (node, region))
+            cmd = [
+                'cd', '.bluster;',
+                'blender-*/blender',
+                pipes.quote('%s/%s' % (dry, inputfile)),
+                '-b',
+                '-P', 'blender.py',
+                '--',
+            ] \
+            + region \
+            + [pipes.quote(outpath)]
+
+            _, stdout, _ = client['client'].exec_command(' '.join(cmd))
+            stdout.read()
+
+            # Retrieve result
+            client['sftp'].get('.bluster/%s' % outpath,
+                               os.path.expanduser('~/.bluster/%s' % outpath))
+        else:
+            break
+
+        regions.task_done()
+
+
+def copy(lock, node, sftp, srcfile, dstdir):
+    '''
+    Copy if needs be
+    '''
+
+    dstfile = '%s/%s' % (dstdir, os.path.basename(srcfile))
+    srctime = os.stat(srcfile).st_mtime
+    try:
+        dsttime = sftp.stat(dstfile).st_mtime
+        if srctime > dsttime:
+            raise IOError
+    except IOError:
+        tprint(lock, "%s: Copying %s" % (node, srcfile))
+        sftp.put(srcfile, dstfile)
 
 
 def main():
@@ -23,36 +145,77 @@ def main():
     parser.add_argument('output', help="output PNG file")
     parser.add_argument('--bpy', default='/usr/share/bluster/blender.py',
                         help="Blender Python file")
+    parser.add_argument('-v', '--verbose', action='store_true')
     args = parser.parse_args()
 
-    # Run Blender
-    files = []
+    # Load config
+    blusterdir = os.path.expanduser('~/.bluster')
+    with open('%s/bluster.yaml' % blusterdir) as fhl:
+        cfg = yaml.load(fhl)
+
+    # Make directory on master
+    indir = '%s/%s' % (blusterdir, args.input[:-6])
+    try:
+        os.mkdir(indir)
+    except OSError:
+        pass
+
+    # Load private key
+    key = paramiko.RSAKey.from_private_key_file(os.path.expanduser(cfg['key']))
+
+    # Set up worker nodes
+    lock = threading.Lock()
+    clients = {}
+    threads = []
+    for node in cfg['nodes']:
+        prms = cfg, lock, args.bpy, clients, node, key, args.input, args.verbose
+        thread = threading.Thread(target=setup, args=prms)
+        thread.start()
+        threads.append(thread)
+
+    # Collect regions
+    regions = queue.Queue()
     for i in range(0, 100, args.region):
         for j in range(0, 100, args.region):
             min_x = '%s' % (i / 100.)
             min_y = '%s' % (j / 100.)
             max_x = '%s' % (min(i + args.region, 100) / 100.)
             max_y = '%s' % (min(j + args.region, 100) / 100.)
-            files.append('%s-%s-%s-%s-%s' % (min_x,
-                                             min_y,
-                                             max_x,
-                                             max_y,
-                                             args.output))
-            subprocess.call(['blender',
-                             args.input,
-                             '-b', '-P', args.bpy,
-                             '--', min_x, min_y, max_x, max_y, args.output])
+            regions.put([min_x, min_y, max_x, max_y])
+
+    # Wait for worker node setup to complete
+    for thread in threads:
+        thread.join()
+
+    # Start workers
+    threads = []
+    now = time.time()
+    for node in clients:
+        prms = lock, regions, node, clients[node], args.input
+        thread = threading.Thread(target=render, args=prms)
+        thread.start()
+        threads.append(thread)
+    regions.join()
+
+    tprint(lock, time.time() - now)
+
+    for _ in clients:
+        regions.put(None)
+
+    for thread in threads:
+        thread.join()
 
     # Stitch images
-    base = pgmagick.Image(files[0])
-    for fle in files[1:]:
-        layer = pgmagick.Image(fle)
+    entries = [entry for entry in os.listdir(indir) if entry.endswith('.png')]
+    base = pgmagick.Image('%s/%s' % (indir, entries[0]))
+    for entry in entries[1:]:
+        layer = pgmagick.Image('%s/%s' % (indir, entry))
         base.composite(layer, 0, 0, pgmagick.CompositeOperator.AddCompositeOp)
     base.write(args.output)
 
     # Clean up
-    for fle in files:
-        os.remove(fle)
+    for entry in entries:
+        os.remove('%s/%s' % (indir, entry))
 
 
 if __name__ == '__main__':
