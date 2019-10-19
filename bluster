@@ -214,8 +214,9 @@ def main():
     base.write(args.output)
 
     # Clean up
-    for entry in entries:
-        os.remove('%s/%s' % (indir, entry))
+    if 'cleanup' in cfg and cfg['cleanup']:
+        for entry in entries:
+            os.remove('%s/%s' % (indir, entry))
 
 
 if __name__ == '__main__':
