@@ -9,7 +9,6 @@ import os
 import argparse
 import pipes
 import threading
-import time
 import queue
 
 import paramiko
@@ -26,9 +25,9 @@ def tprint(lock, msg):
     lock.release()
 
 
-def setup(cfg, lock, bpy, clients, node, key, inputfile):
+def run(cfg, lock, bpy, regions, node, key, inputfile):
     '''
-    Set up worker node
+    Set up worker node and render region
     '''
 
     # Open SSH connection
@@ -38,8 +37,6 @@ def setup(cfg, lock, bpy, clients, node, key, inputfile):
     proxy = paramiko.ProxyCommand('ssh %s nc %s 22' % (cfg['proxy'], node))
     client.connect(hostname=node, username='root', pkey=key, sock=proxy)
     sftp = client.open_sftp()
-
-    clients[node] = {'client': client, 'sftp': sftp}
 
     # Make directories
     dry = os.path.basename(inputfile[:-6])
@@ -79,12 +76,7 @@ def setup(cfg, lock, bpy, clients, node, key, inputfile):
     copy(lock, node, sftp, bpy, '.bluster')
     copy(lock, node, sftp, inputfile, '.bluster/%s' % dry)
 
-
-def render(lock, regions, node, client, inputfile, verbose):
-    '''
-    Render region
-    '''
-
+    # Consume region queue
     while True:
         region = regions.get()
         if region:
@@ -103,17 +95,17 @@ def render(lock, regions, node, client, inputfile, verbose):
             + region \
             + [pipes.quote(outpath)]
 
-            if verbose:
+            if cfg['verbose']:
                 tprint(lock, '%s: %s' % (node, ' '.join(cmd)))
             else:
                 tprint(lock, '%s: %s' % (node, region))
 
-            _, stdout, _ = client['client'].exec_command(' '.join(cmd))
+            _, stdout, _ = client.exec_command(' '.join(cmd))
             stdout.read()
 
             # Retrieve result
-            client['sftp'].get('.bluster/%s' % outpath,
-                               os.path.expanduser('~/.bluster/%s' % outpath))
+            sftp.get('.bluster/%s' % outpath,
+                     os.path.expanduser('~/.bluster/%s' % outpath))
         else:
             break
 
@@ -148,7 +140,6 @@ def main():
     parser.add_argument('output', help="output PNG file")
     parser.add_argument('--bpy', default='/usr/share/bluster/blender.py',
                         help="Blender Python file")
-    parser.add_argument('-v', '--verbose', action='store_true')
     args = parser.parse_args()
 
     # Load config
@@ -166,16 +157,6 @@ def main():
     # Load private key
     key = paramiko.RSAKey.from_private_key_file(os.path.expanduser(cfg['key']))
 
-    # Set up worker nodes
-    lock = threading.Lock()
-    clients = {}
-    threads = []
-    for node in cfg['nodes']:
-        prms = cfg, lock, args.bpy, clients, node, key, args.input
-        thread = threading.Thread(target=setup, args=prms)
-        thread.start()
-        threads.append(thread)
-
     # Collect regions
     regions = queue.Queue()
     for i in range(0, 100, args.region):
@@ -186,23 +167,17 @@ def main():
             max_y = '%s' % (min(j + args.region, 100) / 100.)
             regions.put([min_x, min_y, max_x, max_y])
 
-    # Wait for worker node setup to complete
-    for thread in threads:
-        thread.join()
-
-    # Start workers
+    # Run worker nodes
+    lock = threading.Lock()
     threads = []
-    now = time.time()
-    for node in clients:
-        prms = lock, regions, node, clients[node], args.input, cfg['verbose']
-        thread = threading.Thread(target=render, args=prms)
+    for node in cfg['nodes']:
+        prms = cfg, lock, args.bpy, regions, node, key, args.input
+        thread = threading.Thread(target=run, args=prms)
         thread.start()
         threads.append(thread)
     regions.join()
 
-    tprint(lock, time.time() - now)
-
-    for _ in clients:
+    for _ in cfg['nodes']:
         regions.put(None)
 
     for thread in threads:
