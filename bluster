@@ -213,7 +213,7 @@ def main():
     base = pgmagick.Image('%s/%s' % (indir, entries[0]))
     for entry in entries[1:]:
         layer = pgmagick.Image('%s/%s' % (indir, entry))
-        base.composite(layer, 0, 0, pgmagick.CompositeOperator.AddCompositeOp)
+        base.composite(layer, 0, 0, pgmagick.CompositeOperator.OverCompositeOp)
     base.write(args.output)
 
     # Clean up
