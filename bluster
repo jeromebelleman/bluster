@@ -27,7 +27,7 @@ def tprint(lock, msg):
     lock.release()
 
 
-def setup(cfg, lock, bpy, clients, node, key, inputfile, verbose):
+def setup(cfg, lock, bpy, clients, node, key, inputfile):
     '''
     Set up worker node
     '''
@@ -52,7 +52,7 @@ def setup(cfg, lock, bpy, clients, node, key, inputfile, verbose):
     _, stdout, _ = client.exec_command(cmd)
 
     if stdout.channel.recv_exit_status() == 0:
-        if verbose:
+        if cfg['verbose']:
             tprint(lock, "%s: Blender is already available" % node)
     else:
         tprint(lock, "%s: Installing bzip2" % node)
@@ -80,7 +80,7 @@ def setup(cfg, lock, bpy, clients, node, key, inputfile, verbose):
     copy(lock, node, sftp, inputfile, '.bluster/%s' % inputfile[:-6])
 
 
-def render(lock, regions, node, client, inputfile):
+def render(lock, regions, node, client, inputfile, verbose):
     '''
     Render region
     '''
@@ -104,6 +104,9 @@ def render(lock, regions, node, client, inputfile):
             ] \
             + region \
             + [pipes.quote(outpath)]
+
+            if verbose:
+                tprint(lock, ' '.join(cmd))
 
             _, stdout, _ = client['client'].exec_command(' '.join(cmd))
             stdout.read()
@@ -168,7 +171,7 @@ def main():
     clients = {}
     threads = []
     for node in cfg['nodes']:
-        prms = cfg, lock, args.bpy, clients, node, key, args.input, args.verbose
+        prms = cfg, lock, args.bpy, clients, node, key, args.input
         thread = threading.Thread(target=setup, args=prms)
         thread.start()
         threads.append(thread)
@@ -191,7 +194,7 @@ def main():
     threads = []
     now = time.time()
     for node in clients:
-        prms = lock, regions, node, clients[node], args.input
+        prms = lock, regions, node, clients[node], args.input, cfg['verbose']
         thread = threading.Thread(target=render, args=prms)
         thread.start()
         threads.append(thread)
