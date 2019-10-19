@@ -8,6 +8,7 @@ import sys
 import os
 import argparse
 import pipes
+import subprocess
 import threading
 import queue
 
@@ -31,50 +32,54 @@ def run(cfg, lock, bpy, regions, node, key, inputfile):
     '''
 
     # Open SSH connection
-    tprint(lock, "%s: Opening SSH connection" % node)
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    proxy = paramiko.ProxyCommand('ssh %s nc %s 22' % (cfg['proxy'], node))
-    client.connect(hostname=node, username='root', pkey=key, sock=proxy)
-    sftp = client.open_sftp()
+    if node != 'master':
+        tprint(lock, "%s: Opening SSH connection" % node)
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        proxy = paramiko.ProxyCommand('ssh %s nc %s 22' % (cfg['proxy'], node))
+        client.connect(hostname=node, username='root', pkey=key, sock=proxy)
+        sftp = client.open_sftp()
 
     # Make directories
-    dry = os.path.basename(inputfile[:-6])
-    cmd = 'mkdir -p .bluster/%s' % pipes.quote(dry)
-    _, stdout, _ = client.exec_command(cmd)
-    stdout.read()
+    if node != 'master':
+        dry = os.path.basename(inputfile[:-6])
+        cmd = 'mkdir -p .bluster/%s' % pipes.quote(dry)
+        _, stdout, _ = client.exec_command(cmd)
+        stdout.read()
 
     # Install Blender if needs be
-    cmd = 'ls .bluster/blender-* | grep -v bz2'
-    _, stdout, _ = client.exec_command(cmd)
-
-    if stdout.channel.recv_exit_status() == 0:
-        if cfg['verbose']:
-            tprint(lock, "%s: Blender is already available" % node)
-    else:
-        tprint(lock, "%s: Installing bzip2" % node)
-        cmd = 'yum -y install bzip2'
+    if node != 'master':
+        cmd = 'ls .bluster/blender-* | grep -v bz2'
         _, stdout, _ = client.exec_command(cmd)
-        stdout.read()
 
-        tprint(lock, "%s: Downloading Blender" % node)
-        cmd = 'cd .bluster; curl -LO %s' % pipes.quote(cfg['url'])
-        _, stdout, _ = client.exec_command(cmd)
-        stdout.read()
+        if stdout.channel.recv_exit_status() == 0:
+            if cfg['verbose']:
+                tprint(lock, "%s: Blender is already available" % node)
+        else:
+            tprint(lock, "%s: Installing bzip2" % node)
+            cmd = 'yum -y install bzip2'
+            _, stdout, _ = client.exec_command(cmd)
+            stdout.read()
 
-        tprint(lock, "%s: Extracting Blender tarball" % node)
-        cmd = 'cd .bluster; tar xf blender-*.tar.bz2'
-        _, stdout, _ = client.exec_command(cmd)
-        stdout.read()
+            tprint(lock, "%s: Downloading Blender" % node)
+            cmd = 'cd .bluster; curl -LO %s' % pipes.quote(cfg['url'])
+            _, stdout, _ = client.exec_command(cmd)
+            stdout.read()
 
-        tprint(lock, "%s: Removing Blender tarball" % node)
-        cmd = 'cd .bluster; rm blender-*.tar.bz2'
-        _, stdout, _ = client.exec_command(cmd)
-        stdout.read()
+            tprint(lock, "%s: Extracting Blender tarball" % node)
+            cmd = 'cd .bluster; tar xf blender-*.tar.bz2'
+            _, stdout, _ = client.exec_command(cmd)
+            stdout.read()
+
+            tprint(lock, "%s: Removing Blender tarball" % node)
+            cmd = 'cd .bluster; rm blender-*.tar.bz2'
+            _, stdout, _ = client.exec_command(cmd)
+            stdout.read()
 
     # Copy files
-    copy(lock, node, sftp, bpy, '.bluster')
-    copy(lock, node, sftp, inputfile, '.bluster/%s' % dry)
+    if node != 'master':
+        copy(lock, node, sftp, bpy, '.bluster')
+        copy(lock, node, sftp, inputfile, '.bluster/%s' % dry)
 
     # Consume region queue
     while True:
@@ -84,28 +89,45 @@ def run(cfg, lock, bpy, regions, node, key, inputfile):
             dry = os.path.basename(inputfile[:-6])
             outpath = '%s/%s.png' % (dry, '-'.join(region))
 
-            cmd = [
-                'cd', '.bluster;',
-                'blender-*/blender',
-                pipes.quote('%s/%s' % (dry, os.path.basename(inputfile))),
-                '-b',
-                '-P', 'blender.py',
-                '--',
-            ] \
-            + region \
-            + [pipes.quote(outpath)]
+            if node == 'master':
+                cmd = [
+                    'blender',
+                    os.path.expanduser(inputfile),
+                    '-b',
+                    '-P', os.path.expanduser(bpy),
+                    '--',
+                ] \
+                + region \
+                + [os.path.expanduser('~/.bluster/%s' % outpath)]
+
+            else:
+                cmd = [
+                    'cd', '.bluster;',
+                    'blender-*/blender',
+                    pipes.quote('%s/%s' % (dry, os.path.basename(inputfile))),
+                    '-b',
+                    '-P', 'blender.py',
+                    '--',
+                ] \
+                + region \
+                + [pipes.quote(outpath)]
 
             if cfg['verbose']:
                 tprint(lock, '%s: %s' % (node, ' '.join(cmd)))
             else:
                 tprint(lock, '%s: %s' % (node, region))
 
-            _, stdout, _ = client.exec_command(' '.join(cmd))
-            stdout.read()
+            if node == 'master':
+                with open(os.devnull) as null:
+                    subprocess.call(cmd, stdout=null, stderr=null)
+            else:
+                _, stdout, _ = client.exec_command(' '.join(cmd))
+                stdout.read()
 
             # Retrieve result
-            sftp.get('.bluster/%s' % outpath,
-                     os.path.expanduser('~/.bluster/%s' % outpath))
+            if node != 'master':
+                sftp.get('.bluster/%s' % outpath,
+                         os.path.expanduser('~/.bluster/%s' % outpath))
         else:
             break
 
@@ -148,9 +170,9 @@ def main():
         cfg = yaml.load(fhl)
 
     # Make directory on master
-    indir = '%s/%s' % (blusterdir, os.path.basename(args.input[:-6]))
+    stitchdir = '%s/%s' % (blusterdir, os.path.basename(args.input[:-6]))
     try:
-        os.mkdir(indir)
+        os.mkdir(stitchdir)
     except OSError:
         pass
 
@@ -183,18 +205,18 @@ def main():
     for thread in threads:
         thread.join()
 
-    # Stitch images
-    entries = [entry for entry in os.listdir(indir) if entry.endswith('.png')]
-    base = pgmagick.Image('%s/%s' % (indir, entries[0]))
-    for entry in entries[1:]:
-        layer = pgmagick.Image('%s/%s' % (indir, entry))
+    # Stitch images together
+    entries = [ent for ent in os.listdir(stitchdir) if ent.endswith('.png')]
+    base = pgmagick.Image('%s/%s' % (stitchdir, entries[0]))
+    for ent in entries[1:]:
+        layer = pgmagick.Image('%s/%s' % (stitchdir, ent))
         base.composite(layer, 0, 0, pgmagick.CompositeOperator.OverCompositeOp)
     base.write(args.output)
 
     # Clean up
     if 'cleanup' in cfg and cfg['cleanup']:
-        for entry in entries:
-            os.remove('%s/%s' % (indir, entry))
+        for ent in entries:
+            os.remove('%s/%s' % (stitchdir, ent))
 
 
 if __name__ == '__main__':
