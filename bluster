@@ -19,8 +19,7 @@ import urwid
 
 
 LOCK = threading.Lock()
-TXTS = {}
-
+WGTS = {'progress': {}}
 
 def settext(pipe, node, msg):
     '''
@@ -217,7 +216,11 @@ def update(data):
     if node == 'exit' and msg == 'exit':
         raise urwid.ExitMainLoop()
     else:
-        TXTS[node].set_text(msg)
+        size = float(WGTS['progress']['size'])
+        progress = (size - WGTS['progress']['queue'].qsize()) / size * 100
+        WGTS['progress']['widget'].set_completion(progress)
+
+        WGTS[node].set_text(msg)
 
 
 def main():
@@ -239,8 +242,14 @@ def main():
         cfg = yaml.load(fhl)
 
     # Set up user interface
+    palette = [
+        ('normal', 'white', 'black'),
+        ('complete', 'white', 'dark gray'),
+    ]
+
     grid = urwid.GridFlow([], 50, 1, 1, 'left')
-    loop = urwid.MainLoop(urwid.Filler(grid))
+    pile = urwid.Pile([grid])
+    loop = urwid.MainLoop(urwid.Filler(pile), palette)
     pipe = loop.watch_pipe(update)
 
     # Make directory on master
@@ -263,12 +272,17 @@ def main():
             max_y = '%s' % (min(j + cfg['region'], 100) / 100.)
             regions.put([min_x, min_y, max_x, max_y])
 
+    WGTS['progress']['widget'] = urwid.ProgressBar('normal', 'complete')
+    WGTS['progress']['size'] = regions.qsize()
+    WGTS['progress']['queue'] = regions
+    pile.contents.append((WGTS['progress']['widget'], pile.options()))
+
     # Run worker nodes
     threads = []
     for node in cfg['nodes']:
         # Set up widgets
-        TXTS[node] = urwid.Text('')
-        box = urwid.LineBox(TXTS[node], node)
+        WGTS[node] = urwid.Text('')
+        box = urwid.LineBox(WGTS[node], node)
         grid.contents.append((box, grid.options()))
 
         # Start thread
