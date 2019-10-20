@@ -15,23 +15,28 @@ import queue
 import paramiko
 import pgmagick
 import yaml
+import urwid
 
-def tprint(lock, msg):
+
+LOCK = threading.Lock()
+TXTS = {}
+
+
+def settext(pipe, node, msg):
     '''
-    Thread-safe print
+    Thread-safe set text
     '''
 
-    lock.acquire()
-    print msg
-    lock.release()
+    LOCK.acquire()
+    os.write(pipe, '%s,%s' % (node, msg))
 
 
-def connect(cfg, lock, node, key):
+def connect(cfg, key, pipe, node):
     '''
     Connect to node
     '''
 
-    tprint(lock, "%s: Opening SSH connection" % node)
+    settext(pipe, node, "Connecting")
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     proxy = paramiko.ProxyCommand('ssh %s nc %s 22' % (cfg['proxy'], node))
@@ -41,7 +46,7 @@ def connect(cfg, lock, node, key):
     return client, sftp
 
 
-def install(cfg, lock, node, client):
+def install(cfg, pipe, node, client):
     '''
     Install Blender
     '''
@@ -51,30 +56,30 @@ def install(cfg, lock, node, client):
 
     if stdout.channel.recv_exit_status() == 0:
         if cfg['verbose']:
-            tprint(lock, "%s: Blender is already available" % node)
+            settext(pipe, node, "Blender is already available")
     else:
-        tprint(lock, "%s: Installing bzip2" % node)
+        settext(pipe, node, "Installing bzip2")
         cmd = 'yum -y install bzip2'
         _, stdout, _ = client.exec_command(cmd)
         stdout.read()
 
-        tprint(lock, "%s: Downloading Blender" % node)
+        settext(pipe, node, "Downloading Blender")
         cmd = 'cd .bluster; curl -LO %s' % pipes.quote(cfg['url'])
         _, stdout, _ = client.exec_command(cmd)
         stdout.read()
 
-        tprint(lock, "%s: Extracting Blender tarball" % node)
+        settext(pipe, node, "Extracting Blender tarball")
         cmd = 'cd .bluster; tar xf blender-*.tar.bz2'
         _, stdout, _ = client.exec_command(cmd)
         stdout.read()
 
-        tprint(lock, "%s: Removing Blender tarball" % node)
+        settext(pipe, node, "Removing Blender tarball")
         cmd = 'cd .bluster; rm blender-*.tar.bz2'
         _, stdout, _ = client.exec_command(cmd)
         stdout.read()
 
 
-def render(cfg, lock, bpy, inputfile, node, client, sftp, region):
+def render(cfg, pipe, bpy, inputfile, node, client, sftp, region):
     '''
     Render region
     '''
@@ -106,9 +111,9 @@ def render(cfg, lock, bpy, inputfile, node, client, sftp, region):
         + [pipes.quote(outpath)]
 
     if cfg['verbose']:
-        tprint(lock, '%s: %s' % (node, ' '.join(cmd)))
+        settext(pipe, node, ' '.join(cmd))
     else:
-        tprint(lock, '%s: %s' % (node, region))
+        settext(pipe, node, "Rendering region [%s]" % ', '.join(region))
 
     if node == 'master':
         with open(os.devnull) as null:
@@ -123,7 +128,7 @@ def render(cfg, lock, bpy, inputfile, node, client, sftp, region):
                  os.path.expanduser('~/.bluster/%s' % outpath))
 
 
-def run(cfg, lock, bpy, regions, node, key, inputfile):
+def run(cfg, pipe, bpy, regions, node, key, inputfile):
     '''
     Set up worker node and render region
     '''
@@ -133,9 +138,9 @@ def run(cfg, lock, bpy, regions, node, key, inputfile):
     sftp = None
     if node != 'master':
         try:
-            client, sftp = connect(cfg, lock, node, key)
+            client, sftp = connect(cfg, key, pipe, node)
         except (paramiko.AuthenticationException, paramiko.SSHException), exc:
-            tprint(lock, "%s: %s" % (node, exc))
+            settext(pipe, node, exc)
             return
 
     # Make directories
@@ -147,26 +152,27 @@ def run(cfg, lock, bpy, regions, node, key, inputfile):
 
     # Install Blender if needs be
     if node != 'master':
-        install(cfg, lock, node, client)
+        install(cfg, pipe, node, client)
 
     # Copy files
     if node != 'master':
-        copy(lock, node, sftp, bpy, '.bluster')
-        copy(lock, node, sftp, inputfile, '.bluster/%s' % dry)
+        copy(pipe, node, sftp, bpy, '.bluster')
+        copy(pipe, node, sftp, inputfile, '.bluster/%s' % dry)
 
     # Consume region queue
     while True:
         region = regions.get()
         if region:
             # Render
-            render(cfg, lock, bpy, inputfile, node, client, sftp, region)
+            render(cfg, pipe, bpy, inputfile, node, client, sftp, region)
         else:
+            settext(pipe, node, 'Done')
             break
 
         regions.task_done()
 
 
-def copy(lock, node, sftp, srcfile, dstdir):
+def copy(pipe, node, sftp, srcfile, dstdir):
     '''
     Copy if needs be
     '''
@@ -178,8 +184,38 @@ def copy(lock, node, sftp, srcfile, dstdir):
         if srctime > dsttime:
             raise IOError
     except IOError:
-        tprint(lock, "%s: Copying %s" % (node, srcfile))
+        settext(pipe, node, "Copying %s" % srcfile)
         sftp.put(srcfile, dstfile)
+
+
+def join(cfg, pipe, regions, threads):
+    '''
+    Join threads
+    '''
+
+    regions.join()
+
+    for _ in cfg['nodes']:
+        regions.put(None)
+
+    for thread in threads:
+        thread.join()
+
+    settext(pipe, 'exit', 'exit')
+
+
+def update(data):
+    '''
+    Update user interface
+    '''
+
+    node, msg = data.split(',', 1)
+    LOCK.release()
+
+    if node == 'exit' and msg == 'exit':
+        raise urwid.ExitMainLoop()
+    else:
+        TXTS[node].set_text(msg)
 
 
 def main():
@@ -199,6 +235,11 @@ def main():
     blusterdir = os.path.expanduser('~/.bluster')
     with open('%s/bluster.yaml' % blusterdir) as fhl:
         cfg = yaml.load(fhl)
+
+    # Set up user interface
+    grid = urwid.GridFlow([], 50, 1, 1, 'left')
+    loop = urwid.MainLoop(urwid.Filler(grid))
+    pipe = loop.watch_pipe(update)
 
     # Make directory on master
     stitchdir = '%s/%s' % (blusterdir, os.path.basename(args.input[:-6]))
@@ -221,20 +262,25 @@ def main():
             regions.put([min_x, min_y, max_x, max_y])
 
     # Run worker nodes
-    lock = threading.Lock()
     threads = []
     for node in cfg['nodes']:
-        prms = cfg, lock, args.bpy, regions, node, key, args.input
+        # Set up widgets
+        TXTS[node] = urwid.Text('')
+        box = urwid.LineBox(TXTS[node], node)
+        grid.contents.append((box, grid.options()))
+
+        # Start thread
+        prms = cfg, pipe, args.bpy, regions, node, key, args.input
         thread = threading.Thread(target=run, args=prms)
         thread.start()
         threads.append(thread)
-    regions.join()
 
-    for _ in cfg['nodes']:
-        regions.put(None)
+    # Join threads
+    thread = threading.Thread(target=join, args=(cfg, pipe, regions, threads))
+    thread.start()
 
-    for thread in threads:
-        thread.join()
+    loop.run()
+    thread.join()
 
     # Stitch images together
     entries = [ent for ent in os.listdir(stitchdir) if ent.endswith('.png')]
