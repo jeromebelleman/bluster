@@ -26,6 +26,21 @@ def tprint(lock, msg):
     lock.release()
 
 
+def connect(cfg, lock, node, key):
+    '''
+    Connect to node
+    '''
+
+    tprint(lock, "%s: Opening SSH connection" % node)
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    proxy = paramiko.ProxyCommand('ssh %s nc %s 22' % (cfg['proxy'], node))
+    client.connect(hostname=node, username='root', pkey=key, sock=proxy)
+    sftp = client.open_sftp()
+
+    return client, sftp
+
+
 def run(cfg, lock, bpy, regions, node, key, inputfile):
     '''
     Set up worker node and render region
@@ -33,12 +48,11 @@ def run(cfg, lock, bpy, regions, node, key, inputfile):
 
     # Open SSH connection
     if node != 'master':
-        tprint(lock, "%s: Opening SSH connection" % node)
-        client = paramiko.SSHClient()
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        proxy = paramiko.ProxyCommand('ssh %s nc %s 22' % (cfg['proxy'], node))
-        client.connect(hostname=node, username='root', pkey=key, sock=proxy)
-        sftp = client.open_sftp()
+        try:
+            client, sftp = connect(cfg, lock, node, key)
+        except (paramiko.AuthenticationException, paramiko.SSHException), exc:
+            tprint(lock, "%s: %s" % (node, exc))
+            return
 
     # Make directories
     if node != 'master':
