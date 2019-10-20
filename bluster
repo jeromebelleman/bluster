@@ -189,7 +189,6 @@ def main():
 
     # Parse arguments
     parser = argparse.ArgumentParser()
-    parser.add_argument('region', type=int, help="region size (%)")
     parser.add_argument('input', help="input Blender file")
     parser.add_argument('output', help="output PNG file")
     parser.add_argument('--bpy', default='/usr/share/bluster/blender.py',
@@ -213,12 +212,12 @@ def main():
 
     # Collect regions
     regions = queue.Queue()
-    for i in range(0, 100, args.region):
-        for j in range(0, 100, args.region):
+    for i in range(0, 100, cfg['region']):
+        for j in range(0, 100, cfg['region']):
             min_x = '%s' % (i / 100.)
             min_y = '%s' % (j / 100.)
-            max_x = '%s' % (min(i + args.region, 100) / 100.)
-            max_y = '%s' % (min(j + args.region, 100) / 100.)
+            max_x = '%s' % (min(i + cfg['region'], 100) / 100.)
+            max_y = '%s' % (min(j + cfg['region'], 100) / 100.)
             regions.put([min_x, min_y, max_x, max_y])
 
     # Run worker nodes
