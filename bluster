@@ -124,6 +124,7 @@ def render(cfg, pipe, bpy, inputfile, node, client, sftp, region):
 
     # Retrieve result
     if node != 'master':
+        settext(pipe, node, "Downloading output for [%s]" % ', '.join(region))
         sftp.get('.bluster/%s' % outpath,
                  os.path.expanduser('~/.bluster/%s' % outpath))
 
@@ -161,12 +162,13 @@ def run(cfg, pipe, bpy, regions, node, key, inputfile):
 
     # Consume region queue
     while True:
+        if regions.empty():
+            settext(pipe, node, '')
         region = regions.get()
         if region:
             # Render
             render(cfg, pipe, bpy, inputfile, node, client, sftp, region)
         else:
-            settext(pipe, node, 'Done')
             break
 
         regions.task_done()
