@@ -127,6 +127,8 @@ def render(cfg, pipe, bpy, inputfile, node, client, sftp, region):
         sftp.get('.bluster/%s' % outpath,
                  os.path.expanduser('~/.bluster/%s' % outpath))
 
+    settext(pipe, node, "Done with [%s]" % ', '.join(region))
+
 
 def run(cfg, pipe, bpy, regions, node, key, inputfile):
     '''
@@ -216,9 +218,11 @@ def update(data):
     if node == 'exit' and msg == 'exit':
         raise urwid.ExitMainLoop()
     else:
-        size = float(WGTS['progress']['size'])
-        progress = (size - WGTS['progress']['queue'].qsize()) / size * 100
-        WGTS['progress']['widget'].set_completion(progress)
+        if msg.startswith('Done'):
+            total = WGTS['progress']['total']
+            WGTS['progress']['progress'] += 1
+            progress = WGTS['progress']['progress'] / total * 100
+            WGTS['progress']['widget'].set_completion(progress)
 
         WGTS[node].set_text(msg)
 
@@ -273,8 +277,8 @@ def main():
             regions.put([min_x, min_y, max_x, max_y])
 
     WGTS['progress']['widget'] = urwid.ProgressBar('normal', 'complete')
-    WGTS['progress']['size'] = regions.qsize()
-    WGTS['progress']['queue'] = regions
+    WGTS['progress']['total'] = regions.qsize()
+    WGTS['progress']['progress'] = 0.
     pile.contents.append((WGTS['progress']['widget'], pile.options()))
 
     # Run worker nodes
