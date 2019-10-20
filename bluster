@@ -41,6 +41,39 @@ def connect(cfg, lock, node, key):
     return client, sftp
 
 
+def install(cfg, lock, node, client):
+    '''
+    Install Blender
+    '''
+
+    cmd = 'ls .bluster/blender-* | grep -v bz2'
+    _, stdout, _ = client.exec_command(cmd)
+
+    if stdout.channel.recv_exit_status() == 0:
+        if cfg['verbose']:
+            tprint(lock, "%s: Blender is already available" % node)
+    else:
+        tprint(lock, "%s: Installing bzip2" % node)
+        cmd = 'yum -y install bzip2'
+        _, stdout, _ = client.exec_command(cmd)
+        stdout.read()
+
+        tprint(lock, "%s: Downloading Blender" % node)
+        cmd = 'cd .bluster; curl -LO %s' % pipes.quote(cfg['url'])
+        _, stdout, _ = client.exec_command(cmd)
+        stdout.read()
+
+        tprint(lock, "%s: Extracting Blender tarball" % node)
+        cmd = 'cd .bluster; tar xf blender-*.tar.bz2'
+        _, stdout, _ = client.exec_command(cmd)
+        stdout.read()
+
+        tprint(lock, "%s: Removing Blender tarball" % node)
+        cmd = 'cd .bluster; rm blender-*.tar.bz2'
+        _, stdout, _ = client.exec_command(cmd)
+        stdout.read()
+
+
 def run(cfg, lock, bpy, regions, node, key, inputfile):
     '''
     Set up worker node and render region
@@ -63,32 +96,7 @@ def run(cfg, lock, bpy, regions, node, key, inputfile):
 
     # Install Blender if needs be
     if node != 'master':
-        cmd = 'ls .bluster/blender-* | grep -v bz2'
-        _, stdout, _ = client.exec_command(cmd)
-
-        if stdout.channel.recv_exit_status() == 0:
-            if cfg['verbose']:
-                tprint(lock, "%s: Blender is already available" % node)
-        else:
-            tprint(lock, "%s: Installing bzip2" % node)
-            cmd = 'yum -y install bzip2'
-            _, stdout, _ = client.exec_command(cmd)
-            stdout.read()
-
-            tprint(lock, "%s: Downloading Blender" % node)
-            cmd = 'cd .bluster; curl -LO %s' % pipes.quote(cfg['url'])
-            _, stdout, _ = client.exec_command(cmd)
-            stdout.read()
-
-            tprint(lock, "%s: Extracting Blender tarball" % node)
-            cmd = 'cd .bluster; tar xf blender-*.tar.bz2'
-            _, stdout, _ = client.exec_command(cmd)
-            stdout.read()
-
-            tprint(lock, "%s: Removing Blender tarball" % node)
-            cmd = 'cd .bluster; rm blender-*.tar.bz2'
-            _, stdout, _ = client.exec_command(cmd)
-            stdout.read()
+        install(cfg, lock, node, client)
 
     # Copy files
     if node != 'master':
