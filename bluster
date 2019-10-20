@@ -74,12 +74,63 @@ def install(cfg, lock, node, client):
         stdout.read()
 
 
+def render(cfg, lock, bpy, inputfile, node, client, sftp, region):
+    '''
+    Render region
+    '''
+
+    dry = os.path.basename(inputfile[:-6])
+    outpath = '%s/%s.png' % (dry, '-'.join(region))
+
+    if node == 'master':
+        cmd = [
+            'blender',
+            os.path.expanduser(inputfile),
+            '-b',
+            '-P', os.path.expanduser(bpy),
+            '--',
+        ] \
+        + region \
+        + [os.path.expanduser('~/.bluster/%s' % outpath)]
+
+    else:
+        cmd = [
+            'cd', '.bluster;',
+            'blender-*/blender',
+            pipes.quote('%s/%s' % (dry, os.path.basename(inputfile))),
+            '-b',
+            '-P', 'blender.py',
+            '--',
+        ] \
+        + region \
+        + [pipes.quote(outpath)]
+
+    if cfg['verbose']:
+        tprint(lock, '%s: %s' % (node, ' '.join(cmd)))
+    else:
+        tprint(lock, '%s: %s' % (node, region))
+
+    if node == 'master':
+        with open(os.devnull) as null:
+            subprocess.call(cmd, stdout=null, stderr=null)
+    else:
+        _, stdout, _ = client.exec_command(' '.join(cmd))
+        stdout.read()
+
+    # Retrieve result
+    if node != 'master':
+        sftp.get('.bluster/%s' % outpath,
+                 os.path.expanduser('~/.bluster/%s' % outpath))
+
+
 def run(cfg, lock, bpy, regions, node, key, inputfile):
     '''
     Set up worker node and render region
     '''
 
     # Open SSH connection
+    client = None
+    sftp = None
     if node != 'master':
         try:
             client, sftp = connect(cfg, lock, node, key)
@@ -108,48 +159,7 @@ def run(cfg, lock, bpy, regions, node, key, inputfile):
         region = regions.get()
         if region:
             # Render
-            dry = os.path.basename(inputfile[:-6])
-            outpath = '%s/%s.png' % (dry, '-'.join(region))
-
-            if node == 'master':
-                cmd = [
-                    'blender',
-                    os.path.expanduser(inputfile),
-                    '-b',
-                    '-P', os.path.expanduser(bpy),
-                    '--',
-                ] \
-                + region \
-                + [os.path.expanduser('~/.bluster/%s' % outpath)]
-
-            else:
-                cmd = [
-                    'cd', '.bluster;',
-                    'blender-*/blender',
-                    pipes.quote('%s/%s' % (dry, os.path.basename(inputfile))),
-                    '-b',
-                    '-P', 'blender.py',
-                    '--',
-                ] \
-                + region \
-                + [pipes.quote(outpath)]
-
-            if cfg['verbose']:
-                tprint(lock, '%s: %s' % (node, ' '.join(cmd)))
-            else:
-                tprint(lock, '%s: %s' % (node, region))
-
-            if node == 'master':
-                with open(os.devnull) as null:
-                    subprocess.call(cmd, stdout=null, stderr=null)
-            else:
-                _, stdout, _ = client.exec_command(' '.join(cmd))
-                stdout.read()
-
-            # Retrieve result
-            if node != 'master':
-                sftp.get('.bluster/%s' % outpath,
-                         os.path.expanduser('~/.bluster/%s' % outpath))
+            render(cfg, lock, bpy, inputfile, node, client, sftp, region)
         else:
             break
 
