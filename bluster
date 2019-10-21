@@ -130,6 +130,24 @@ def render(cfg, pipe, bpy, inputfile, node, client, sftp, region):
     settext(pipe, node, "Done with [%s]" % ', '.join(region))
 
 
+def copyfiles(pipe, node, sftp, bpy, inputfile, dry):
+    '''
+    Copy all necessary files
+    '''
+
+    copy(pipe, node, sftp, bpy, '.bluster')
+
+    drypath = '.bluster/%s' % dry
+    copy(pipe, node, sftp, inputfile, drypath)
+
+    texpath = '%s/textures' % os.path.dirname(os.path.abspath(inputfile))
+    if os.path.exists(texpath):
+        for ent in os.listdir(texpath):
+            copy(pipe, node, sftp,
+                 '%s/%s' % (texpath, ent),
+                 '%s/textures' % drypath)
+
+
 def run(cfg, pipe, bpy, regions, node, key, inputfile):
     '''
     Set up worker node and render region
@@ -148,7 +166,7 @@ def run(cfg, pipe, bpy, regions, node, key, inputfile):
     # Make directories
     if node != 'master':
         dry = os.path.basename(inputfile[:-6])
-        cmd = 'mkdir -p .bluster/%s' % pipes.quote(dry)
+        cmd = 'mkdir -p .bluster/%s/textures' % pipes.quote(dry)
         _, stdout, _ = client.exec_command(cmd)
         stdout.read()
 
@@ -158,8 +176,7 @@ def run(cfg, pipe, bpy, regions, node, key, inputfile):
 
     # Copy files
     if node != 'master':
-        copy(pipe, node, sftp, bpy, '.bluster')
-        copy(pipe, node, sftp, inputfile, '.bluster/%s' % dry)
+        copyfiles(pipe, node, sftp, bpy, inputfile, dry)
 
     # Consume region queue
     while True:
