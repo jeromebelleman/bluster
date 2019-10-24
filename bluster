@@ -131,20 +131,20 @@ def render(cfg, pipe, bpy, inputfile, node, client, sftp, region):
     settext(pipe, node, "Done with [%s]" % ', '.join(region))
 
 
-def copyfiles(pipe, node, sftp, bpy, inputfile, dry):
+def copyfiles(cfg, pipe, node, client, sftp, bpy, inputfile, dry):
     '''
     Copy all necessary files
     '''
 
-    copy(pipe, node, sftp, bpy, '.bluster')
+    copy(cfg, pipe, node, client, sftp, bpy, '.bluster')
 
     drypath = '.bluster/%s' % dry
-    copy(pipe, node, sftp, inputfile, drypath)
+    copy(cfg, pipe, node, client, sftp, inputfile, drypath)
 
     texpath = '%s/textures' % os.path.dirname(os.path.abspath(inputfile))
     if os.path.exists(texpath):
         for ent in os.listdir(texpath):
-            copy(pipe, node, sftp,
+            copy(cfg, pipe, node, client, sftp,
                  '%s/%s' % (texpath, ent),
                  '%s/textures' % drypath)
 
@@ -177,7 +177,7 @@ def run(cfg, pipe, bpy, regions, node, key, inputfile):
 
     # Copy files
     if node != 'master':
-        copyfiles(pipe, node, sftp, bpy, inputfile, dry)
+        copyfiles(cfg, pipe, node, client, sftp, bpy, inputfile, dry)
 
     # Consume region queue
     while True:
@@ -193,18 +193,40 @@ def run(cfg, pipe, bpy, regions, node, key, inputfile):
         regions.task_done()
 
 
-def copy(pipe, node, sftp, srcfile, dstdir):
+def copy(cfg, pipe, node, client, sftp, srcfile, dstdir):
     '''
     Copy if needs be
     '''
 
-    dstfile = '%s/%s' % (dstdir, os.path.basename(srcfile))
+    basename = os.path.basename(srcfile)
     srctime = os.stat(srcfile).st_mtime
+    srcsize = os.stat(srcfile).st_size
+    dstfile = '%s/%s' % (dstdir, basename)
+
     try:
         dsttime = sftp.stat(dstfile).st_mtime
-        if srctime > dsttime:
+        dstsize = sftp.stat(dstfile).st_size
+        if srctime > dsttime or srcsize != dstsize:
             raise IOError
     except IOError:
+        if 'web' in cfg:
+            url = pipes.quote('%s/%s' % (cfg['web'], basename))
+
+            # Check if the texture is available
+            cmd = 'curl -I %s' % url
+            _, stdout, _ = client.exec_command(cmd)
+            status = stdout.next()
+            stdout.read()
+
+            # Download the texture
+            if '200' in status or '302' in status:
+                settext(pipe, node, "Downloading %s" % basename)
+                cmd = 'cd %s; curl -O %s' % (pipes.quote(dstdir), url)
+                _, stdout, _ = client.exec_command(cmd)
+                stdout.read()
+                return
+
+        # Upload the texture
         settext(pipe, node, "Copying %s" % srcfile)
         sftp.put(srcfile, dstfile)
 
