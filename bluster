@@ -9,6 +9,7 @@ import os
 import argparse
 import pipes
 import subprocess
+import logging
 import threading
 import queue
 
@@ -244,6 +245,16 @@ def update(data):
         WGTS[node].set_text(msg)
 
 
+def log(msg):
+    '''
+    Log thread-safe
+    '''
+
+    LOCK.acquire()
+    logging.info(msg)
+    LOCK.release()
+
+
 def main():
     '''
     Run
@@ -261,6 +272,9 @@ def main():
     blusterdir = os.path.expanduser('~/.bluster')
     with open('%s/bluster.yaml' % blusterdir) as fhl:
         cfg = yaml.load(fhl)
+
+    # Configure logging
+    logging.basicConfig(filename=cfg['log'], level=logging.INFO)
 
     # Set up user interface
     palette = [
