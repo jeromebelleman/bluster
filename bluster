@@ -10,6 +10,7 @@ import argparse
 import pipes
 import subprocess
 import logging
+import urllib
 import threading
 import queue
 
@@ -210,7 +211,7 @@ def copy(cfg, pipe, node, client, sftp, srcfile, dstdir):
             raise IOError
     except IOError:
         if 'web' in cfg:
-            url = pipes.quote('%s/%s' % (cfg['web'], basename))
+            url = pipes.quote('%s/%s' % (cfg['web'], urllib.quote(basename)))
 
             # Check if the texture is available
             cmd = 'curl -I %s' % url
