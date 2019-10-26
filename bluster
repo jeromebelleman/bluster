@@ -207,7 +207,7 @@ def copy(cfg, pipe, node, client, sftp, srcfile, dstdir):
     try:
         dsttime = sftp.stat(dstfile).st_mtime
         dstsize = sftp.stat(dstfile).st_size
-        if srctime > dsttime or srcsize != dstsize:
+        if srctime > dsttime or srcsize != dstsize or cfg['overwrite']:
             raise IOError
     except IOError:
         if 'web' in cfg:
