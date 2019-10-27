@@ -284,9 +284,11 @@ def main():
     '''
 
     # Parse arguments
-    parser = argparse.ArgumentParser()
-    parser.add_argument('input', help="input Blender file")
-    parser.add_argument('output', help="output PNG file")
+    parser = argparse.ArgumentParser(
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+    parser.add_argument('inblend', metavar='INBLEND', help="input Blender file")
+    parser.add_argument('outpng', metavar='OUTPNG', help="output PNG file")
     parser.add_argument('--bpy', default='/usr/share/bluster/blender.py',
                         help="Blender Python file")
     args = parser.parse_args()
@@ -311,7 +313,7 @@ def main():
     pipe = loop.watch_pipe(update)
 
     # Make directory on master
-    stitchdir = '%s/%s' % (blusterdir, os.path.basename(args.input[:-6]))
+    stitchdir = '%s/%s' % (blusterdir, os.path.basename(args.inblend[:-6]))
     try:
         os.mkdir(stitchdir)
     except OSError:
@@ -344,7 +346,7 @@ def main():
         grid.contents.append((box, grid.options()))
 
         # Start thread
-        prms = cfg, pipe, args.bpy, regions, node, key, args.input
+        prms = cfg, pipe, args.bpy, regions, node, key, args.inblend
         thread = threading.Thread(target=run, args=prms)
         thread.start()
         threads.append(thread)
@@ -362,7 +364,7 @@ def main():
     for ent in entries[1:]:
         layer = pgmagick.Image('%s/%s' % (stitchdir, ent))
         base.composite(layer, 0, 0, pgmagick.CompositeOperator.OverCompositeOp)
-    base.write(args.output)
+    base.write(args.outpng)
 
     # Clean up
     if 'cleanup' in cfg and cfg['cleanup']:
