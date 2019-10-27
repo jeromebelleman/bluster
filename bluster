@@ -23,6 +23,7 @@ import urwid
 LOCK = threading.Lock()
 WGTS = {'progress': {}}
 
+
 def settext(pipe, node, msg):
     '''
     Thread-safe set text
@@ -199,10 +200,10 @@ def copy(cfg, pipe, node, client, sftp, srcfile, dstdir):
     Copy if needs be
     '''
 
-    base = os.path.basename(srcfile)
+    basename = os.path.basename(srcfile)
     srctime = os.stat(srcfile).st_mtime
     srcsize = os.stat(srcfile).st_size
-    dstfile = '%s/%s' % (dstdir, base)
+    dstfile = '%s/%s' % (dstdir, basename)
 
     try:
         dsttime = sftp.stat(dstfile).st_mtime
@@ -211,20 +212,7 @@ def copy(cfg, pipe, node, client, sftp, srcfile, dstdir):
             raise IOError
     except IOError:
         if 'web' in cfg:
-            url = pipes.quote('%s/%s' % (cfg['web']['url'], urllib.quote(base)))
-
-            # Check if the texture is available
-            cmd = 'curl -I %s' % url
-            _, stdout, _ = client.exec_command(cmd)
-            status = stdout.next()
-            stdout.read()
-
-            # Download the texture
-            if '200' in status or '302' in status:
-                settext(pipe, node, "Downloading %s" % base)
-                cmd = 'cd %s; curl -O %s' % (pipes.quote(dstdir), url)
-                _, stdout, _ = client.exec_command(cmd)
-                stdout.read()
+            if curl(cfg, pipe, node, client, basename, dstdir):
                 return
 
         # Upload the texture
@@ -278,12 +266,11 @@ def log(msg):
     LOCK.release()
 
 
-def main():
+def parseargs():
     '''
-    Run
+    Parse arguments
     '''
 
-    # Parse arguments
     parser = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
@@ -291,7 +278,72 @@ def main():
     parser.add_argument('outpng', metavar='OUTPNG', help="output PNG file")
     parser.add_argument('--bpy', default='/usr/share/bluster/blender.py',
                         help="Blender Python file")
-    args = parser.parse_args()
+
+    return parser.parse_args()
+
+
+def stitch(cfg, stitchdir, outpng):
+    '''
+    Stitch images together
+    '''
+
+    # Stitch images together
+    entries = [ent for ent in os.listdir(stitchdir) if ent.endswith('.png')]
+    base = pgmagick.Image('%s/%s' % (stitchdir, entries[0]))
+    for ent in entries[1:]:
+        layer = pgmagick.Image('%s/%s' % (stitchdir, ent))
+        base.composite(layer, 0, 0, pgmagick.CompositeOperator.OverCompositeOp)
+    base.write(outpng)
+
+    # Clean up
+    if 'cleanup' in cfg and cfg['cleanup']:
+        for ent in entries:
+            os.remove('%s/%s' % (stitchdir, ent))
+
+
+def rsync(cfg, inblend):
+    '''
+    Copy files to the web server
+    '''
+
+    cmd = ['rsync',
+           '-az',
+           '--progress',
+           inblend,
+           '%s/textures/' % os.path.dirname(os.path.abspath(inblend)),
+           cfg['web']['path']]
+    subprocess.call(cmd)
+
+
+def curl(cfg, pipe, node, client, basename, dstdir):
+    '''
+    Download file
+    '''
+
+    url = pipes.quote('%s/%s' % (cfg['web']['url'], urllib.quote(basename)))
+
+    # Check if the texture is available
+    cmd = 'curl -I %s' % url
+    _, stdout, _ = client.exec_command(cmd)
+    status = stdout.next()
+    stdout.read()
+
+    # Download the texture
+    if '200' in status or '302' in status:
+        settext(pipe, node, "Downloading %s" % basename)
+        cmd = 'cd %s; curl -O %s' % (pipes.quote(dstdir), url)
+        _, stdout, _ = client.exec_command(cmd)
+        stdout.read()
+        return True
+
+
+def main():
+    '''
+    Run
+    '''
+
+    # Parse arguments
+    args = parseargs()
 
     # Load config
     blusterdir = os.path.expanduser('~/.bluster')
@@ -339,13 +391,7 @@ def main():
 
     # Copy files to the web server if needs be
     if 'web' in cfg:
-        cmd = ['rsync',
-               '-az',
-               '--progress',
-               args.inblend,
-               '%s/textures/' % os.path.dirname(os.path.abspath(args.inblend)),
-               cfg['web']['path']]
-        subprocess.call(cmd)
+        rsync(cfg, args.inblend)
 
     # Run worker nodes
     threads = []
@@ -369,17 +415,7 @@ def main():
     thread.join()
 
     # Stitch images together
-    entries = [ent for ent in os.listdir(stitchdir) if ent.endswith('.png')]
-    base = pgmagick.Image('%s/%s' % (stitchdir, entries[0]))
-    for ent in entries[1:]:
-        layer = pgmagick.Image('%s/%s' % (stitchdir, ent))
-        base.composite(layer, 0, 0, pgmagick.CompositeOperator.OverCompositeOp)
-    base.write(args.outpng)
-
-    # Clean up
-    if 'cleanup' in cfg and cfg['cleanup']:
-        for ent in entries:
-            os.remove('%s/%s' % (stitchdir, ent))
+    stitch(cfg, stitchdir, args.outpng)
 
 
 if __name__ == '__main__':
