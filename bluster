@@ -199,10 +199,10 @@ def copy(cfg, pipe, node, client, sftp, srcfile, dstdir):
     Copy if needs be
     '''
 
-    basename = os.path.basename(srcfile)
+    base = os.path.basename(srcfile)
     srctime = os.stat(srcfile).st_mtime
     srcsize = os.stat(srcfile).st_size
-    dstfile = '%s/%s' % (dstdir, basename)
+    dstfile = '%s/%s' % (dstdir, base)
 
     try:
         dsttime = sftp.stat(dstfile).st_mtime
@@ -211,7 +211,7 @@ def copy(cfg, pipe, node, client, sftp, srcfile, dstdir):
             raise IOError
     except IOError:
         if 'web' in cfg:
-            url = pipes.quote('%s/%s' % (cfg['web'], urllib.quote(basename)))
+            url = pipes.quote('%s/%s' % (cfg['web']['url'], urllib.quote(base)))
 
             # Check if the texture is available
             cmd = 'curl -I %s' % url
@@ -221,7 +221,7 @@ def copy(cfg, pipe, node, client, sftp, srcfile, dstdir):
 
             # Download the texture
             if '200' in status or '302' in status:
-                settext(pipe, node, "Downloading %s" % basename)
+                settext(pipe, node, "Downloading %s" % base)
                 cmd = 'cd %s; curl -O %s' % (pipes.quote(dstdir), url)
                 _, stdout, _ = client.exec_command(cmd)
                 stdout.read()
@@ -336,6 +336,16 @@ def main():
     WGTS['progress']['total'] = regions.qsize()
     WGTS['progress']['progress'] = 0.
     pile.contents.append((WGTS['progress']['widget'], pile.options()))
+
+    # Copy files to the web server if needs be
+    if 'web' in cfg:
+        cmd = ['rsync',
+               '-az',
+               '--progress',
+               args.inblend,
+               '%s/textures/' % os.path.dirname(os.path.abspath(args.inblend)),
+               cfg['web']['path']]
+        subprocess.call(cmd)
 
     # Run worker nodes
     threads = []
